@@ -20,6 +20,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    ignore:
+      # Provider major versions are planned migrations (state upgrades, renamed
+      # arguments), not routine bumps. See the Roadmap in README.md.
+      - dependency-name: "hashicorp/azurerm"
+        update-types: ["version-update:semver-major"]
     groups:
       terraform:
         patterns: ["*"]

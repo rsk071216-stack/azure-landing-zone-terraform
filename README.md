@@ -443,6 +443,7 @@ transfer to your team.
 
 ## Roadmap
 
+- [ ] Migrate to azurerm 5.x (pinned by design to 4.80.0, the newest 4.x release with at least two weeks of soak time; Dependabot ignores provider majors).
 - [ ] Management group hierarchy and policy initiatives (policy set definitions) at management-group scope.
 - [ ] Multi-subscription spoke vending (subscription per workload) with provider aliases.
 - [ ] Azure DNS Private Resolver for hybrid resolution; VPN Gateway module for the reserved `GatewaySubnet`.
