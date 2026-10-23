@@ -1,0 +1,166 @@
+# Continuous integration. Needs NO Azure credentials: every job runs against
+# source code or a mocked azurerm provider, so it is safe on forks and PRs.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform.d/plugin-cache
+  TERRAFORM_VERSION: "1.15.9"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-plugins-${{ runner.os }}-${{ hashFiles('environments/*/.terraform.lock.hcl', 'modules/*/versions.tf') }}
+      - name: init -backend=false + validate (every root and module)
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          set -euo pipefail
+          for dir in environments/* modules/*; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -no-color > /dev/null
+            terraform -chdir="$dir" validate -no-color
+            echo "::endgroup::"
+            echo "| \`$dir\` | valid |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  test:
+    name: terraform test (${{ matrix.terraform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported minor (mock providers need >= 1.7) and current pin.
+        terraform: ["1.9.8", "1.15.9"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          terraform_wrapper: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-plugins-${{ runner.os }}-${{ hashFiles('environments/*/.terraform.lock.hcl', 'modules/*/versions.tf') }}
+      - name: terraform test (mocked azurerm provider, no Azure account)
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          set -euo pipefail
+          {
+            echo "### terraform test - Terraform ${{ matrix.terraform }}"
+            echo
+            echo "| Directory | Result |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for dir in $(find modules environments -name '*.tftest.hcl' -path '*/tests/*' | xargs -n1 dirname | xargs -n1 dirname | sort -u); do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -no-color > /dev/null
+            terraform -chdir="$dir" test -no-color | tee /tmp/test.log
+            echo "::endgroup::"
+            echo "| \`$dir\` | $(tail -n 1 /tmp/test.log) |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  tflint:
+    name: tflint (azurerm ruleset)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ runner.os }}-${{ hashFiles('.tflint.hcl') }}
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        with:
+          tflint_version: v0.64.0
+      - run: tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+
+  checkov:
+    name: checkov (soft fail)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: bridgecrewio/checkov-action@a76233b2c1d4a820a9dc68be350c473a4a9dceec # v12.3130.0
+        with:
+          directory: .
+          framework: terraform
+          soft_fail: true
+          quiet: true
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+      - name: Upload SARIF to code scanning
+        if: always() && hashFiles('results.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: results.sarif
+          category: checkov
+
+  docs:
+    name: terraform-docs up to date
+    runs-on: ubuntu-latest
+    env:
+      TFDOCS_VERSION: v0.24.0
+      TFDOCS_SHA256: 9005daf969de0b50134493a2c00078b49f5f5b39d021cda7c89bf4d4f3d776d3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install terraform-docs (checksum verified)
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/tfdocs.tgz "https://github.com/terraform-docs/terraform-docs/releases/download/${TFDOCS_VERSION}/terraform-docs-${TFDOCS_VERSION}-linux-amd64.tar.gz"
+          echo "${TFDOCS_SHA256}  /tmp/tfdocs.tgz" | sha256sum -c -
+          tar -xzf /tmp/tfdocs.tgz -C /tmp terraform-docs
+          sudo install /tmp/terraform-docs /usr/local/bin/terraform-docs
+      - name: Check module READMEs
+        run: |
+          set -euo pipefail
+          for m in modules/*/; do
+            terraform-docs -c .terraform-docs.yml --output-check "$m" \
+              || { echo "::error file=${m}README.md::README out of date. Run: terraform-docs -c .terraform-docs.yml $m"; exit 1; }
+          done
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: shellcheck scripts/*.sh

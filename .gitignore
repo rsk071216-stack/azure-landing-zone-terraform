@@ -1,0 +1,30 @@
+# Terraform working directories and state (state lives in the remote backend)
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+tfplan
+plan.txt
+
+# Local variable files may hold subscription IDs or e-mail addresses
+*.auto.tfvars
+*.auto.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Lock files are committed for deployable roots only; modules float within constraints
+modules/**/.terraform.lock.hcl
+
+# Scanner output
+results.sarif
+results_*.sarif
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

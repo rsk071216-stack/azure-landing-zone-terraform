@@ -1,0 +1,29 @@
+# terraform-docs configuration. CI fails if a module README is out of date:
+#   for m in modules/*/; do terraform-docs -c .terraform-docs.yml "$m"; done
+formatter: "markdown table"
+version: ">= 0.24.0, < 1.0.0"
+
+output:
+  file: README.md
+  mode: inject
+  template: |-
+    <!-- BEGIN_TF_DOCS -->
+    {{ .Content }}
+    <!-- END_TF_DOCS -->
+
+sections:
+  hide: ["providers"]
+
+sort:
+  enabled: true
+  by: required
+
+settings:
+  anchor: false
+  default: true
+  escape: true
+  html: false
+  indent: 3
+  lockfile: false
+  required: true
+  type: true
